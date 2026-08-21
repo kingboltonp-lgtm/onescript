@@ -11,16 +11,30 @@ import os
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-UPSTOX_API_KEY = os.getenv("UPSTOX_API_KEY", "")
-UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN", "")
+_PLACEHOLDER_VALUES = {
+    "YOUR_TELEGRAM_BOT_TOKEN",
+    "YOUR_CHAT_ID",
+    "YOUR_API_KEY",
+    "YOUR_ACCESS_TOKEN",
+}
+
+
+def env_secret(name: str, default: str = "") -> str:
+    """Read an env var, treating empty and .env.example placeholders as unset."""
+    raw = os.getenv(name, default)
+    value = (raw or "").strip().strip('"').strip("'")
+    if not value or value.upper() in _PLACEHOLDER_VALUES or value.upper().startswith("YOUR_"):
+        return ""
+    return value
+
+
 HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "3600"))
 LOOP_INTERVAL_SECONDS = int(os.getenv("LOOP_INTERVAL_SECONDS", "5"))
 
@@ -35,13 +49,19 @@ _shutdown = threading.Event()
 
 def send_telegram_alert(message: str) -> bool:
     """Send a Markdown message to the configured Telegram chat."""
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        logging.warning("Telegram is not configured; skipping alert.")
+    token = env_secret("TELEGRAM_TOKEN")
+    chat_id = env_secret("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        logging.warning(
+            "Telegram is not configured; skipping alert. "
+            "Edit onescript/.env and replace YOUR_TELEGRAM_BOT_TOKEN / YOUR_CHAT_ID "
+            "with a real BotFather token and numeric chat id, then save and rerun."
+        )
         return False
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
+        "chat_id": chat_id,
         "text": message,
         "parse_mode": "Markdown",
     }
@@ -59,8 +79,8 @@ def heartbeat_monitor(interval_seconds: int = 3600) -> None:
     while not _shutdown.is_set():
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         msg = f"🟢 *Bot Heartbeat* \nStatus: Alive & Monitoring\nTime: {now}"
-        send_telegram_alert(msg)
-        logging.info("Heartbeat sent to Telegram.")
+        if send_telegram_alert(msg):
+            logging.info("Heartbeat sent to Telegram.")
         if _shutdown.wait(interval_seconds):
             break
 
@@ -100,10 +120,10 @@ def initialize_upstox() -> bool:
     Plug in upstox_client (or REST login) here when you have a live access token.
     """
     logging.info("Initializing Upstox connection...")
-    if not UPSTOX_API_KEY or not UPSTOX_ACCESS_TOKEN:
+    if not env_secret("UPSTOX_API_KEY") or not env_secret("UPSTOX_ACCESS_TOKEN"):
         logging.warning(
-            "UPSTOX_API_KEY / UPSTOX_ACCESS_TOKEN are not set. "
-            "Running in paper/mock mode."
+            "UPSTOX_API_KEY / UPSTOX_ACCESS_TOKEN are not set (placeholders in "
+            ".env do not count). Running in paper/mock mode."
         )
         return True
 

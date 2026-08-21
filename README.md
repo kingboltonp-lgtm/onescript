@@ -54,6 +54,32 @@ python bot.py
 
 Edit `.env` with your Telegram bot token, chat id, and Upstox credentials. Do not commit `.env`.
 
+Placeholder text such as `YOUR_TELEGRAM_BOT_TOKEN` is **not** a token. Leave those strings in place and Telegram will return `404 Not Found`.
+
+### Fill Telegram values
+
+1. In Telegram, open [@BotFather](https://t.me/BotFather) → `/newbot` (or `/token` for an existing bot) and copy the token. It looks like `123456789:AAH...`, not `YOUR_TELEGRAM_BOT_TOKEN`.
+2. Start a chat with **your** bot and send any message.
+3. In a browser, open  
+   `https://api.telegram.org/bot<YOUR_REAL_TOKEN>/getUpdates`  
+   and find `"chat":{"id": ...}`. That number is `TELEGRAM_CHAT_ID`.
+4. Save `.env` like this (no quotes, no spaces around `=`):
+
+```
+TELEGRAM_TOKEN=123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TELEGRAM_CHAT_ID=987654321
+```
+
+5. Stop the bot (`Ctrl+C`) and run `python bot.py` again.
+
+To pick up README/code fixes from this branch:
+
+```powershell
+cd $HOME\onescript
+git pull
+git checkout cursor/trading-bot-system-be63
+```
+
 ## What you should see
 
 On start the bot sends a boot message to Telegram (if tokens are set), starts a background heartbeat (default every 3600 seconds), and loops with a mock Nifty spot while it auto-selects a 1-strike ITM call.
