@@ -2,29 +2,63 @@
 
 Local trading-bot skeleton with Telegram alerts, an hourly heartbeat, and automatic ATM/ITM/OTM strike selection. Upstox is stubbed until you add a live session.
 
-## Setup
+Run every command **inside the cloned `onescript` folder**. `bot.py` and `.env.example` live there, not in `C:\Users\DELL`.
+
+## Windows (PowerShell)
+
+```powershell
+# 1. Clone the repo, then enter it
+cd $HOME
+git clone https://github.com/kingboltonp-lgtm/onescript.git
+cd onescript
+git checkout cursor/trading-bot-system-be63
+
+# 2. Confirm you are in the project (must list bot.py and .env.example)
+Get-ChildItem
+
+# 3. Optional: isolated Python env
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# 4. Install THIS project's packages (requests, python-dotenv, pytest — not Django)
+python -m pip install -r requirements.txt
+
+# 5. Create your local secrets file
+Copy-Item .env.example .env
+notepad .env
+
+# 6. Start the bot
+python bot.py
+```
+
+If PowerShell blocks the venv script, run this once as Administrator, then retry `Activate.ps1`:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Stop the bot with `Ctrl+C`.
+
+## macOS / Linux
 
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux:
+git clone https://github.com/kingboltonp-lgtm/onescript.git
+cd onescript
+git checkout cursor/trading-bot-system-be63
+python3 -m venv .venv
 source .venv/bin/activate
-
 pip install -r requirements.txt
 cp .env.example .env
+python bot.py
 ```
 
 Edit `.env` with your Telegram bot token, chat id, and Upstox credentials. Do not commit `.env`.
 
-## Run
+## What you should see
 
-```bash
-python bot.py
-```
+On start the bot sends a boot message to Telegram (if tokens are set), starts a background heartbeat (default every 3600 seconds), and loops with a mock Nifty spot while it auto-selects a 1-strike ITM call.
 
-On start the bot sends a boot message to Telegram, starts a background heartbeat (default every 3600 seconds), and loops with a mock Nifty spot while it auto-selects a 1-strike ITM call.
-
-Stop with `Ctrl+C` (sends a shutdown alert).
+If Telegram env vars are empty, it logs a warning and keeps running.
 
 ## Strike helper
 
@@ -42,7 +76,7 @@ Example: Nifty 22432.45, `CE`, step 50, depth 1 → strike **22400**.
 ## Tests
 
 ```bash
-pytest
+python -m pytest
 ```
 
 ## Notes
