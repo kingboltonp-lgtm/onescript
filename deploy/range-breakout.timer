@@ -1,5 +1,5 @@
 [Unit]
-Description=Start the range breakout bot each weekday before the open
+Description=Start the range breakout scanner each weekday before the open
 
 [Timer]
 OnCalendar=Mon..Fri 09:05 Asia/Kolkata

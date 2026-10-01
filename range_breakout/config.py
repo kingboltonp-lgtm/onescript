@@ -10,6 +10,8 @@ try:
 except ImportError:  # python-dotenv is optional
     pass
 
+DEFAULT_INDICES = "NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,BSE_INDEX|SENSEX"
+
 
 def _get(name, default=""):
     return os.environ.get(name, default).strip()
@@ -34,25 +36,21 @@ class Config:
     telegram_bot_token: str
     telegram_chat_id: str
 
-    signal_instrument: str
-    trade_instrument: str
-    lot_size: int
+    indices: tuple
 
     candle_minutes: int
-    reward_risk: float
-    max_trades_per_day: int
-    last_entry_time: time
-    square_off_time: time
+    min_range_candles: int
+    max_range_candles: int
+    atr_period: int
+    range_atr_mult: float
     max_range_pct: float
-
-    risk_per_trade: float
-    max_lots: int
-
-    live_trading: bool
+    breakout_buffer_pct: float
+    breakout_on: str
+    target_mult: float
+    last_alert_time: time
 
 
 def load_config():
-    signal = _get("SIGNAL_INSTRUMENT", "NSE_INDEX|Nifty 50")
     return Config(
         api_key=_get("UPSTOX_API_KEY"),
         api_secret=_get("UPSTOX_API_SECRET"),
@@ -63,16 +61,20 @@ def load_config():
         aws_region=_get("AWS_REGION", "ap-south-1"),
         telegram_bot_token=_get("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_get("TELEGRAM_CHAT_ID"),
-        signal_instrument=signal,
-        trade_instrument=_get("TRADE_INSTRUMENT") or signal,
-        lot_size=int(_get("LOT_SIZE", "1")),
+        indices=tuple(k.strip() for k in _get("INDICES", DEFAULT_INDICES).split(",") if k.strip()),
         candle_minutes=int(_get("CANDLE_MINUTES", "15")),
-        reward_risk=float(_get("REWARD_RISK", "2.0")),
-        max_trades_per_day=int(_get("MAX_TRADES_PER_DAY", "1")),
-        last_entry_time=_time(_get("LAST_ENTRY_TIME", "14:30")),
-        square_off_time=_time(_get("SQUARE_OFF_TIME", "15:15")),
+        min_range_candles=int(_get("MIN_RANGE_CANDLES", "4")),
+        max_range_candles=int(_get("MAX_RANGE_CANDLES", "12")),
+        atr_period=int(_get("ATR_PERIOD", "14")),
+        range_atr_mult=float(_get("RANGE_ATR_MULT", "1.5")),
         max_range_pct=float(_get("MAX_RANGE_PCT", "0")),
-        risk_per_trade=float(_get("RISK_PER_TRADE", "7500")),
-        max_lots=int(_get("MAX_LOTS", "1")),
-        live_trading=_get("LIVE_TRADING", "false").lower() == "true",
+        breakout_buffer_pct=float(_get("BREAKOUT_BUFFER_PCT", "0.02")),
+        breakout_on=_get("BREAKOUT_ON", "ltp").lower(),
+        target_mult=float(_get("TARGET_MULT", "1.0")),
+        last_alert_time=_time(_get("LAST_ALERT_TIME", "15:00")),
     )
+
+
+def short_name(instrument_key):
+    """'NSE_INDEX|Nifty 50' -> 'Nifty 50'."""
+    return instrument_key.split("|", 1)[-1]

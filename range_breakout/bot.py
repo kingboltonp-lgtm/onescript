@@ -1,45 +1,38 @@
-"""Live 15-minute range breakout bot.
+"""Live tight-range breakout scanner for Nifty 50, Bank Nifty and Sensex.
 
-Run once per trading day (systemd timer / cron at ~09:10 IST):
+Run once per trading day (systemd timer at ~09:05 IST):
 
     python -m range_breakout.bot
 
-It waits for the market, builds the opening range, watches each completed
-15-minute candle for a breakout, manages stop/target with LTP polling, squares
-off at SQUARE_OFF_TIME and exits after the close. Orders are only sent when
-LIVE_TRADING=true; otherwise every action is a [PAPER] alert.
+Every completed 15m candle it looks for a tight range on each index and
+alerts on Telegram when one forms; between candles it polls LTP and alerts the
+moment price breaks out up or down, with a scalp stop and target, then reports
+whether the target or stop was hit. Alerts only: it never places orders.
+If restarted mid-day it rebuilds today's state silently from the candles.
 """
-import json
 import logging
-import os
 import time as _time
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
-from .config import load_config
-from .strategy import IST, LONG, Params, RangeBreakout
+from .config import load_config, short_name
+from .strategy import IST, Params, TightRangeScanner
 from .telegram import Telegram
 from .token_store import load_token
 from .upstox_client import TokenExpired, Upstox
 
 log = logging.getLogger("range_breakout")
 
-POLL_SECONDS = 20
+POLL_SECONDS = 15
+MARKET_OPEN = time(9, 15)
 MARKET_CLOSE = time(15, 30)
-STATE_DIR = os.environ.get("STATE_DIR", "state")
+STOP_AT = time(15, 32)  # lets the 15:15 candle land so open scalps get closed
+WARMUP_DAYS = 7
+
+ICONS = {"RANGE": "🟡", "BREAKOUT": "🚀", "TARGET": "✅", "STOP": "❌", "EXPIRED": "⏹"}
 
 
 def now_ist():
     return datetime.now(IST)
-
-
-def state_path(day):
-    return os.path.join(STATE_DIR, f"{day}.json")
-
-
-def save_state(strat):
-    os.makedirs(STATE_DIR, exist_ok=True)
-    with open(state_path(strat.s.day), "w") as fh:
-        json.dump(strat.to_dict(), fh, indent=2)
 
 
 def wait_for_token(cfg, tg):
@@ -55,31 +48,32 @@ def wait_for_token(cfg, tg):
             except TokenExpired:
                 pass
         if not alerted:
-            tg.send("Range breakout: Upstox token missing or expired. Run get_token to log in.")
+            tg.send("Range scanner: Upstox token missing or expired. Run get_token to log in.")
             alerted = True
         _time.sleep(60)
     return None
 
 
-class Executor:
-    def __init__(self, cfg, client, tg):
-        self.cfg, self.client, self.tg = cfg, client, tg
-
-    def handle(self, ev):
-        tag = "" if self.cfg.live_trading else "[PAPER] "
-        self.tg.send(f"{tag}{self.cfg.signal_instrument}: {ev.message}")
-        if ev.kind not in ("ENTRY", "EXIT") or not self.cfg.live_trading:
-            return
-        if ev.kind == "ENTRY":
-            side = "BUY" if ev.side == LONG else "SELL"
-        else:
-            side = "SELL" if ev.side == LONG else "BUY"
+def build_scanners(cfg, client, tg):
+    params = Params.from_config(cfg)
+    today = date.today()
+    scanners = {}
+    for key in cfg.indices:
+        sc = TightRangeScanner(short_name(key), params)
         try:
-            resp = self.client.place_market_order(self.cfg.trade_instrument, side, ev.qty)
-            self.tg.send(f"Order {side} {ev.qty} {self.cfg.trade_instrument} placed: {resp}")
-        except Exception as exc:  # never die silently with a position open
-            log.exception("order failed")
-            self.tg.send(f"ORDER FAILED {side} {ev.qty} {self.cfg.trade_instrument}: {exc}. Check the position manually!")
+            hist = client.historical_candles(key, cfg.candle_minutes,
+                                             (today - timedelta(days=WARMUP_DAYS)).isoformat(),
+                                             (today - timedelta(days=1)).isoformat())
+            sc.warmup(hist)
+        except Exception as exc:  # ATR then builds up from today's candles only
+            log.warning("warmup failed for %s: %s", key, exc)
+            tg.send(f"Range scanner: no history for {sc.name} ({exc}); ATR will start from today's candles")
+        scanners[key] = sc
+    return scanners
+
+
+def alert(tg, ev):
+    tg.send(f"{ICONS.get(ev.kind, '')} {ev.message}")
 
 
 def run():
@@ -89,65 +83,51 @@ def run():
     client = wait_for_token(cfg, tg)
     if not client:
         return
-    strat = RangeBreakout(Params.from_config(cfg))
-    exe = Executor(cfg, client, tg)
+    scanners = build_scanners(cfg, client, tg)
+    names = ", ".join(sc.name for sc in scanners.values())
+    tg.send(f"Range scanner started on {names} ({cfg.candle_minutes}m, breakout on {cfg.breakout_on})")
 
-    today = now_ist().date().isoformat()
-    resumed = os.path.exists(state_path(today))
-    if resumed:
-        with open(state_path(today)) as fh:
-            strat.load_dict(json.load(fh))
-        log.info("Resumed state for %s", today)
-    mode = "LIVE" if cfg.live_trading else "PAPER"
-    tg.send(f"Range breakout bot started ({mode}) on {cfg.signal_instrument}, {cfg.candle_minutes}m candles")
-
-    first_fetch = not resumed
     step = timedelta(minutes=cfg.candle_minutes)
-    while True:
+    caught_up = set()
+    seen_candles = 0
+    while now_ist().time() < STOP_AT:
         now = now_ist()
-        if now.time() >= MARKET_CLOSE:
-            break
+        if now.time() < MARKET_OPEN:
+            _time.sleep(POLL_SECONDS)
+            continue
         try:
-            candles = [
-                c for c in client.intraday_candles(cfg.signal_instrument, cfg.candle_minutes)
-                if c.ts + step <= now and c.ts.date().isoformat() == today
-            ]
-            if first_fetch and len(candles) > 1:
-                # Started late with no saved state: rebuild the range silently and
-                # don't act on breakouts that already happened before we were running.
-                for c in candles[:-1]:
-                    for ev in strat.on_candle(c):
-                        if ev.kind == "ENTRY":
-                            strat.s.position = None
-                            tg.send(f"Started late: missed {ev.message}")
-                candles = candles[-1:]
-            if candles:
-                first_fetch = False
-            for c in candles:
-                for ev in strat.on_candle(c):
-                    exe.handle(ev)
-            if strat.s.position:
-                for ev in strat.on_price(now, client.ltp(cfg.signal_instrument)):
-                    exe.handle(ev)
-            if strat.s.day:
-                save_state(strat)
+            for key, sc in scanners.items():
+                candles = [c for c in client.intraday_candles(key, cfg.candle_minutes)
+                           if c.ts + step <= now and c.ts.date() == now.date()]
+                seen_candles += len(candles)
+                if key not in caught_up and candles:
+                    # first fetch (also after a restart): replay all but the latest silently
+                    for c in candles[:-1]:
+                        sc.on_candle(c)
+                    candles = candles[-1:]
+                    caught_up.add(key)
+                for c in candles:
+                    for ev in sc.on_candle(c):
+                        alert(tg, ev)
+            prices = client.ltp(list(scanners))
+            for key, sc in scanners.items():
+                if key in prices:
+                    for ev in sc.on_price(now, prices[key]):
+                        alert(tg, ev)
         except TokenExpired:
-            tg.send("Upstox token expired mid-session. Run get_token; bot is waiting.")
+            tg.send("Upstox token expired mid-session. Run get_token; scanner is waiting.")
             client = wait_for_token(cfg, tg)
             if not client:
                 break
-            exe.client = client
         except Exception as exc:
             log.exception("loop error")
-            tg.send(f"Range breakout loop error: {exc}")
+            tg.send(f"Range scanner error: {exc}")
         _time.sleep(POLL_SECONDS)
 
-    if not strat.s.day:
-        tg.send("Range breakout: no candles today (holiday?)")
+    if not seen_candles:
+        tg.send("Range scanner: no candles today (holiday?)")
         return
-    trades = strat.s.closed
-    summary = ", ".join(f"{t['side']} {t['pnl']:+.0f} ({t['reason']})" for t in trades) or "no trades"
-    tg.send(f"Range breakout {today} done. {summary}. Day P&L {strat.s.realized_pnl:+.2f}")
+    tg.send("Range scanner stopped for the day.")
 
 
 if __name__ == "__main__":

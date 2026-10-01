@@ -2,5 +2,4 @@
 .upstox_token
 __pycache__/
 *.pyc
-state/
 logs/

@@ -1,5 +1,5 @@
 [Unit]
-Description=15m range breakout bot (one trading day)
+Description=15m tight range breakout scanner (one trading day)
 After=network-online.target
 
 [Service]

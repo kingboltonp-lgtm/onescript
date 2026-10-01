@@ -1,4 +1,4 @@
-"""Thin wrapper over the Upstox REST API (v2 auth, v3 candles/quotes/orders)."""
+"""Thin wrapper over the Upstox REST API (v2 auth, v3 candles and quotes). Read-only: no orders."""
 import logging
 from datetime import datetime
 from urllib.parse import quote, urlencode
@@ -10,7 +10,6 @@ from .strategy import Candle, IST
 log = logging.getLogger(__name__)
 
 API = "https://api.upstox.com"
-HFT = "https://api-hft.upstox.com"
 
 
 class TokenExpired(Exception):
@@ -83,28 +82,7 @@ class Upstox:
         )
         return _parse_candles(data["candles"])
 
-    def ltp(self, instrument_key):
-        data = self._get(f"{API}/v3/market-quote/ltp", instrument_key=instrument_key)
-        # response is keyed "EXCHANGE:SYMBOL"; we only ever ask for one instrument
-        return float(next(iter(data.values()))["last_price"])
-
-    def place_market_order(self, instrument_key, side, quantity, tag="range-breakout"):
-        body = {
-            "quantity": quantity,
-            "product": "I",
-            "validity": "DAY",
-            "price": 0,
-            "tag": tag,
-            "instrument_token": instrument_key,
-            "order_type": "MARKET",
-            "transaction_type": side,
-            "disclosed_quantity": 0,
-            "trigger_price": 0,
-            "is_amo": False,
-            "slice": True,
-        }
-        resp = self.session.post(f"{HFT}/v3/order/place", json=body, timeout=15)
-        if resp.status_code == 401:
-            raise TokenExpired("Upstox token rejected (401); generate a new one")
-        resp.raise_for_status()
-        return resp.json()["data"]
+    def ltp(self, instrument_keys):
+        """Last traded price for several instruments: {instrument_key: price}."""
+        data = self._get(f"{API}/v3/market-quote/ltp", instrument_key=",".join(instrument_keys))
+        return {q["instrument_token"]: float(q["last_price"]) for q in data.values()}
