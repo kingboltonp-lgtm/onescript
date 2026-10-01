@@ -1,0 +1,11 @@
+[Unit]
+Description=15m range breakout bot (one trading day)
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/onescript
+EnvironmentFile=/opt/onescript/.env
+ExecStart=/opt/onescript/.venv/bin/python -m range_breakout.bot
+TimeoutStopSec=30
