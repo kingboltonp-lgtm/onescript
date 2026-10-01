@@ -10,10 +10,11 @@ and alerts you the moment price breaks out either way, so you can take the scalp
 
 | Step | Rule (defaults in `range_scan/strategy.py` → `RangeParams`) |
 |---|---|
-| **Tight range** | at least **30** (up to 60) consecutive closed 15m candles whose combined high-low fits inside **4 × ATR(14)** of the candles before them. 30 candles is more than one session (25), so the range reaches back into the previous day(s); on startup the scanner loads the last 10 days so the full window is checked before any alert. The range keeps growing while candles stay inside it. |
+| **Tight range** | at least **30** (up to 60) consecutive closed 15m candles whose combined high-low is among the **narrowest 20%** of all 30-candle ranges of that index over the **last 20 sessions**. Each index is compared with its own recent behaviour, so there are no fixed point values to maintain, and BANKNIFTY and SENSEX get their own scale. 30 candles is more than one session (25), so the range reaches back into the previous day(s). On startup the scanner loads ~35 days of 15m data, so the whole comparison is done before any alert. The range keeps growing while candles stay inside it. |
 | **Breakout** | LTP (polled every 10s) moves **0.02%** past the range high (UP) or low (DOWN). Set `breakout_on="close"` to wait for a 15m close instead. |
 | **No chasing** | if price is already more than **0.5 ATR** past the edge when seen (including an opening gap), you get a "missed" note instead of an entry |
-| **Scalp levels** | SL = other side of the range, target = **1 × range width** from entry |
+| **SL** | **1 ATR back inside** the broken edge, and never deeper than the range **midpoint**. A real breakout shouldn't fall back into the box; if it does, the trade is wrong. Using the far side of a 30-candle range would make the stop several times too wide for a scalp. |
+| **Target** | **2R** (2 × the distance from entry to SL) |
 | **Timing** | no new ranges or breakouts after **15:00**; one range or scalp per index at a time; open scalps close at 15:30 |
 
 ### Alerts you'll get on Telegram
@@ -49,8 +50,8 @@ delivers its token.
 3. Log: `ssh ... "tail -n 30 orb_scalper/logs/cron_range.log"`.
 
 ## 5. Tuning
-- `range_atr_mult` lower → tighter ranges and fewer alerts; `min_candles` higher → longer squeezes only
+- `tight_percentile` lower (e.g. 10) → only the very tightest ranges and fewer alerts; `min_candles` higher → longer squeezes only
+- `sl_atr` 1.0 → 0.5 gives tighter stops (more stop-outs); `target_r` 2.0 → 1.5 gives quicker scalps
 - `span_days=False` keeps ranges inside one session (then use a smaller `min_candles`, e.g. 4-8)
 - `max_range_pct` adds a hard cap on width as a % of price
-- `target_mult` 1.0 → 1.5 lets winners run further
 - Change one parameter at a time and re-run the backtest.

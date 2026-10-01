@@ -14,7 +14,9 @@ def fmt_range(ev, p) -> str:
         f"🟡 <b>TIGHT RANGE {escape(ev.name)}</b>\n"
         f"<b>High:</b> {r.high:.2f}  <b>Low:</b> {r.low:.2f}\n"
         f"Width {r.width:.2f} pts ({r.width / r.high * 100:.2f}%) | ATR {r.atr:.2f}\n"
-        f"<i>{r.candles}x{p.candle_minutes}m candles, {span_label(r.start, end)}. "
+        + (f"Narrower than {100 - r.pctile:.0f}% of {p.min_candles}-candle ranges in the last "
+           f"{p.lookback_days} sessions\n" if p.tight_percentile else "")
+        + f"<i>{r.candles}x{p.candle_minutes}m candles, {span_label(r.start, end)}. "
         f"Watching for a break either way.</i>"
     )
 
@@ -26,7 +28,7 @@ def fmt_breakout(ev, p) -> str:
         f"{'🟢' if up else '🔴'} <b>BREAKOUT {'UP' if up else 'DOWN'} {escape(ev.name)}</b>\n"
         f"<b>Entry:</b> {s.entry:.2f}\n"
         f"<b>SL:</b> {s.stop:.2f}  (risk {abs(s.entry - s.stop):.2f} pts)\n"
-        f"<b>Target:</b> {s.target:.2f}  ({p.target_mult:g}x range)\n"
+        f"<b>Target:</b> {s.target:.2f}  ({p.target_r:g}R)\n"
         f"<i>Range {r.low:.2f} - {r.high:.2f} ({r.candles}x{p.candle_minutes}m) | "
         f"{s.ts:%H:%M}</i>"
     )

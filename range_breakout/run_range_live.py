@@ -27,7 +27,7 @@ OPEN, CLOSE = dtime(9, 15), dtime(15, 30)
 STOP_AT = dtime(15, 31)            # lets the 15:15 candle land so open scalps get closed
 TOKEN_REMIND_AT = [dtime(9, 10), dtime(9, 40)]
 TOKEN_GIVE_UP = dtime(10, 30)
-WARMUP_DAYS = 10                   # covers the 30-60 candle range window + ATR, holidays included
+WARMUP_DAYS = 35                   # ~20 sessions to rank range widths, plus the range window and ATR
 LTP_POLL_SECONDS = 10
 BAR_CLOSE_DELAY_SECONDS = 4
 log = logging.getLogger("range_live")
@@ -91,8 +91,9 @@ class RangeMonitor:
             except Exception as e:
                 log.warning("warmup %s failed: %s", name, e)
         self.tg.send(f"📐 <b>Range scanner started</b>: {', '.join(INDEX_NAMES)} on {P.candle_minutes}m\n"
-                     f"Tight = {P.min_candles}+ candles (incl. earlier days) within {P.range_atr_mult:g}x ATR | "
-                     f"breakout on {P.breakout_on} | last alert {P.last_alert_time:%H:%M}")
+                     f"Tight = {P.min_candles}+ candles in the narrowest {P.tight_percentile:g}% of the last "
+                     f"{P.lookback_days} sessions | SL {P.sl_atr:g} ATR inside (max midpoint) | "
+                     f"target {P.target_r:g}R | last alert {P.last_alert_time:%H:%M}")
         return True
 
     def process_bar(self, bar_end: datetime):

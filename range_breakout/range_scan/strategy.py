@@ -4,17 +4,21 @@ Pure logic with no I/O, shared by run_range_live.py and range_backtest.py, so
 what you backtest is what runs live. One scanner instance watches one index.
 
 A *tight range* is a run of at least min_candles completed candles (30 by
-default, so it reaches back into earlier sessions; set span_days=False to keep
-ranges inside one day) whose total high-low span is at most range_atr_mult x the ATR of
-the candles before it (and, optionally, at most max_range_pct of price). The
-longest such run ending at the latest candle is taken, and it keeps growing
-while new candles stay inside it.
+default, so it reaches back into earlier sessions) whose total high-low span is
+among the narrowest tight_percentile % of all 30-candle spans of that index
+over the last lookback_days sessions. Each index is judged against its own
+recent behaviour, so no fixed point values are needed. Optional extra caps:
+range_atr_mult x ATR and max_range_pct of price. The longest such run ending at
+the latest candle is taken, and it keeps growing while candles stay inside it.
 
 A *breakout* is price moving breakout_buffer_pct beyond the range high (up) or
 low (down): on live LTP when breakout_on="ltp", or on a 15m close when
-breakout_on="close". Each breakout gets a scalp plan (stop = other side of the
-range, target = target_mult x range width from entry) and its outcome is
-reported. After a breakout the scanner looks for the next range.
+breakout_on="close". Breakouts more than max_extension_atr past the edge
+(e.g. a gap open) are reported as missed, not chased. After a breakout the
+scanner looks for the next range.
+
+Levels: SL = sl_atr x ATR back inside the broken edge (never deeper than the
+range midpoint); target = target_r x risk.
 """
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
@@ -44,11 +48,16 @@ class RangeParams:
     max_candles: int = 60
     span_days: bool = True          # let a range continue across the overnight gap
     atr_period: int = 14
-    range_atr_mult: float = 4.0     # 30-candle span vs one-candle ATR; calibrate with the backtest
+    # Tight = narrower than this percentile of all 30-candle ranges of the same index over the
+    # last `lookback_days` sessions, so each index is judged against its own recent behaviour.
+    tight_percentile: float = 20.0
+    lookback_days: int = 20
+    range_atr_mult: float = 0.0     # optional extra cap: span <= this x ATR (0 = off; used alone if tight_percentile=0)
     max_range_pct: float = 0.0
     breakout_buffer_pct: float = 0.02
     breakout_on: str = "ltp"  # ltp | close
-    target_mult: float = 1.0
+    sl_atr: float = 1.0             # SL: 1 ATR back inside the range, never deeper than its midpoint
+    target_r: float = 2.0           # target = 2 x risk
     max_extension_atr: float = 0.5  # don't chase: skip if entry is this many ATR past the range edge
     last_alert_time: time = time(15, 0)
 
@@ -65,6 +74,7 @@ class Range:
     end: datetime  # start of the last candle inside the range
     candles: int
     atr: float
+    pctile: float = 0.0  # % of recent same-length ranges that were narrower (lower = tighter)
 
     @property
     def width(self):
@@ -121,6 +131,7 @@ class TightRangeScanner:
         self.search_from = 0  # ranges may not start before this index
         self.rng = None
         self.scalp = None
+        self._widths = {}  # end index -> span of the min_candles window ending there
 
     # --- helpers -----------------------------------------------------------
     def _end_time(self, c):
@@ -141,6 +152,21 @@ class TightRangeScanner:
         buf = self.rng.high * self.p.breakout_buffer_pct / 100
         return rnd(self.rng.high + buf), rnd(self.rng.low - buf)
 
+    def _width(self, end):
+        """Span of the min_candles window ending at index `end` (cached)."""
+        w = self._widths.get(end)
+        if w is None:
+            win = self.candles[end - self.p.min_candles + 1:end + 1]
+            w = self._widths[end] = max(c.high for c in win) - min(c.low for c in win)
+        return w
+
+    def _recent_widths(self, before):
+        """Spans of every min_candles window that ended before index `before`, over lookback_days."""
+        per_day = 375 // self.p.candle_minutes  # 09:15-15:30
+        lo = max(self.p.min_candles - 1, before - self.p.lookback_days * per_day)
+        widths = sorted(self._width(e) for e in range(lo, before))
+        return widths if len(widths) >= 5 * per_day else []  # need ~5 sessions to judge
+
     def _find_range(self):
         last = len(self.candles) - 1
         first_allowed = self.search_from if self.p.span_days else max(self.day_start, self.search_from)
@@ -159,11 +185,22 @@ class TightRangeScanner:
             if not atr:
                 continue
             span = hi - lo
-            if span > self.p.range_atr_mult * atr:
+            pctile = 0.0
+            if self.p.tight_percentile:
+                widths = self._recent_widths(i)
+                if not widths:
+                    continue
+                k = min(len(widths) - 1, int(len(widths) * self.p.tight_percentile / 100))
+                if span > widths[k]:
+                    continue
+                pctile = sum(w < span for w in widths) / len(widths) * 100
+            if self.p.range_atr_mult and span > self.p.range_atr_mult * atr:
+                continue
+            if not self.p.tight_percentile and not self.p.range_atr_mult:
                 continue
             if self.p.max_range_pct and span / self.candles[last].close * 100 > self.p.max_range_pct:
                 continue
-            best = Range(hi, lo, self.candles[i].ts, self.candles[last].ts, n, atr)
+            best = Range(hi, lo, self.candles[i].ts, self.candles[last].ts, n, atr, round(pctile, 1))
         return best
 
     def _range_msg(self, r):
@@ -173,6 +210,7 @@ class TightRangeScanner:
             f"{self.name} tight range {_fmt(r.low)} - {_fmt(r.high)} "
             f"({r.width:.1f} pts, {pct:.2f}%) over {r.candles}x{self.p.candle_minutes}m "
             f"{span_label(r.start, end)} | ATR {r.atr:.1f}"
+            + (f" | narrower than {100 - r.pctile:.0f}% of recent ranges" if self.p.tight_percentile else "")
         )
 
     def _breakout(self, side, price, ts):
@@ -185,8 +223,12 @@ class TightRangeScanner:
             return Event("SKIP", self.name,
                          f"{self.name} broke {side} but price {_fmt(price)} is too far past "
                          f"{_fmt(edge)} to chase", side=side, price=price, rng=r)
-        stop = r.low if side == UP else r.high
-        target = rnd(price + sign * self.p.target_mult * r.width)
+        # A real breakout shouldn't fall back deep into the box: SL sits sl_atr back inside the
+        # broken edge, capped at the range midpoint so wide ranges don't get wide stops.
+        mid = (r.high + r.low) / 2
+        stop = rnd(max(mid, r.high - self.p.sl_atr * r.atr) if side == UP
+                   else min(mid, r.low + self.p.sl_atr * r.atr))
+        target = rnd(price + sign * self.p.target_r * abs(price - stop))
         self.scalp = Scalp(side, price, stop, target, ts, r)
         self.rng = None
         self.search_from = len(self.candles)  # next range starts after this candle

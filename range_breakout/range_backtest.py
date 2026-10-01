@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta
 
 from range_scan.strategy import IST, INDEX_NAMES, PARAMS as P, Candle, TightRangeScanner
 
-WARMUP_DAYS = 10
+WARMUP_DAYS = 35
 
 
 def load_csv(path):
