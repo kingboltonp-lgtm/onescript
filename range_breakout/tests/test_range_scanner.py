@@ -209,6 +209,23 @@ class TightRangeTest(unittest.TestCase):
         self.assertEqual(ev[0].kind, "SKIP")
         self.assertIn("against the trend", fmt_event(ev[0], sc.p))
 
+    def test_fade_failed_breakout(self):
+        sc = scanner(mode="fade", target_r=1.0)
+        evs = feed(sc, candles([WIDE] + [TIGHT] * 4 + [(103, 106, 102, 105.5), (105, 105, 101, 102)]))
+        self.assertEqual([e.kind for e in evs], ["RANGE", "BREAKOUT"])
+        s = evs[1].scalp
+        self.assertEqual((s.side, s.entry), (DOWN, 102))  # broke up, closed back inside: fade down
+        self.assertGreater(s.stop, 106)  # just above the failed move's high
+        self.assertIn("FAILED BREAKOUT, FADE DOWN", fmt_event(evs[1], sc.p))
+        self.assertEqual(sc.on_price(T0 + timedelta(minutes=110), 104.5), [])  # ltp never opens fades
+
+    def test_fade_skipped_when_breakout_holds(self):
+        sc = scanner(mode="fade", fade_window=2)
+        held = [(105, 108, 104.5, 107)] * 4
+        evs = feed(sc, candles([WIDE] + [TIGHT] * 4 + [(103, 106, 102, 105.5)] + held))
+        self.assertNotIn("BREAKOUT", [e.kind for e in evs])
+        self.assertIsNone(sc.pending)
+
     def test_alert_formatting(self):
         sc = scanner()
         evs = feed(sc, candles([WIDE] + [TIGHT] * 4 + [(102, 106, 102, 105), (105, 111, 104, 110)]))

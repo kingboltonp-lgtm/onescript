@@ -24,8 +24,10 @@ def fmt_range(ev, p) -> str:
 def fmt_breakout(ev, p) -> str:
     s, r = ev.scalp, ev.rng
     up = s.side == UP
+    title = (f"FAILED BREAKOUT, FADE {'UP' if up else 'DOWN'}" if p.mode == "fade"
+             else f"BREAKOUT {'UP' if up else 'DOWN'}")
     return (
-        f"{'🟢' if up else '🔴'} <b>BREAKOUT {'UP' if up else 'DOWN'} {escape(ev.name)}</b>\n"
+        f"{'🟢' if up else '🔴'} <b>{title} {escape(ev.name)}</b>\n"
         f"<b>Entry:</b> {s.entry:.2f}\n"
         f"<b>SL:</b> {s.stop:.2f}  (risk {abs(s.entry - s.stop):.2f} pts)\n"
         f"<b>Target:</b> {s.target:.2f}  ({p.target_r:g}R)\n"

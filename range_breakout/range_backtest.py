@@ -57,6 +57,9 @@ PRESETS = {
     "all-filters+1.5atr": dict(breakout_on="close", no_entry_before=time(9, 30), trend_ema=200,
                                sl_atr=1.5, target_r=1.5),
     "tightest-10%": dict(tight_percentile=10),
+    "fade-2R": dict(mode="fade"),
+    "fade-1R": dict(mode="fade", target_r=1.0),
+    "fade-1R+skip0915": dict(mode="fade", target_r=1.0, no_entry_before=time(9, 30)),
 }
 
 

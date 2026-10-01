@@ -60,6 +60,8 @@ class RangeParams:
     target_r: float = 2.0           # target = 2 x risk
     max_extension_atr: float = 0.5  # don't chase: skip if entry is this many ATR past the range edge
     no_entry_before: time = time(9, 15)  # e.g. 09:30 ignores breakouts in the opening candle
+    mode: str = "breakout"          # "fade": trade the failure instead (break out, then close back inside)
+    fade_window: int = 3            # fade: candles after the break in which price must close back inside
     trend_ema: int = 0              # e.g. 200 (~8 sessions): only trade the side the range sits on vs this 15m EMA (0 = off)
     last_alert_time: time = time(15, 0)
 
@@ -136,6 +138,7 @@ class TightRangeScanner:
         self.scalp = None
         self._widths = {}  # end index -> span of the min_candles window ending there
         self._ref = {}  # window start index -> sorted reference widths
+        self.pending = None  # fade mode: a breakout waiting to fail
         self.ema = None
 
     # --- helpers -----------------------------------------------------------
@@ -252,6 +255,30 @@ class TightRangeScanner:
             side=side, price=price, rng=r, scalp=self.scalp,
         )
 
+    def _check_fade(self, c, late):
+        """Fade mode: enter the other way when a breakout closes back inside the range."""
+        pd = self.pending
+        r, sign = pd["rng"], 1 if pd["side"] == UP else -1
+        pd["extreme"] = max(pd["extreme"], c.high) if sign == 1 else min(pd["extreme"], c.low)
+        back_inside = c.close < r.high if sign == 1 else c.close > r.low
+        if back_inside and not late and not self.scalp:
+            self.pending = None
+            side = DOWN if sign == 1 else UP
+            stop = rnd(pd["extreme"] + sign * 0.1 * r.atr)  # just beyond the failed move's extreme
+            entry = c.close
+            target = rnd(entry - sign * self.p.target_r * abs(entry - stop))
+            self.scalp = Scalp(side, entry, stop, target, c.ts, r)
+            return [Event(
+                "BREAKOUT", self.name,
+                f"{self.name} FAILED BREAKOUT {pd['side']} -> FADE {side} @ {_fmt(entry)} | range "
+                f"{_fmt(r.low)} - {_fmt(r.high)} | SL {_fmt(stop)} | TGT {_fmt(target)}",
+                side=side, price=entry, rng=r, scalp=self.scalp,
+            )]
+        pd["n"] += 1
+        if pd["n"] > self.p.fade_window or late:
+            self.pending = None  # the breakout held (or it's too late): nothing to fade
+        return []
+
     def _close_scalp(self, kind, price):
         s = self.scalp
         pts = (price - s.entry) * (1 if s.side == UP else -1)
@@ -312,6 +339,11 @@ class TightRangeScanner:
 
         late = self._end_time(c) > self.p.last_alert_time
 
+        # 1b. fade mode: a breakout from an earlier candle that may fail
+        if self.pending:
+            events += self._check_fade(c, late)
+            return events
+
         # 2. breakout of the active range
         if self.rng and c.ts.time() < self.p.no_entry_before:
             return events  # opening candle(s) ignored: the range stays as it was
@@ -332,6 +364,13 @@ class TightRangeScanner:
                 price = up if side == UP else down
                 if side == UP and c.open > up or side == DOWN and c.open < down:
                     price = c.open  # gapped through the level: the open is the first price seen
+            if side and not late and not self.scalp and self.p.mode == "fade":
+                r = self.rng
+                self.pending = {"side": side, "extreme": c.high if side == UP else c.low, "rng": r, "n": 0}
+                self.rng = None
+                self.search_from = len(self.candles)
+                events += self._check_fade(c, late)  # a wick through that closes back inside fades at once
+                return events
             if side and not late and not self.scalp:
                 events.append(self._breakout(side, price, c.ts))
                 ev = self._check_scalp_candle(c) if self.scalp and self.p.breakout_on == "ltp" else None
@@ -363,7 +402,8 @@ class TightRangeScanner:
             if (s.side == UP and price >= s.target) or (s.side == DOWN and price <= s.target):
                 return [self._close_scalp("TARGET", price)]
             return []
-        if (self.rng and self.p.breakout_on == "ltp" and ts.time() <= self.p.last_alert_time
+        if (self.rng and self.p.breakout_on == "ltp" and self.p.mode == "breakout"
+                and ts.time() <= self.p.last_alert_time
                 and ts.time() >= self.p.no_entry_before):
             up, down = self._triggers()
             if price >= up:
