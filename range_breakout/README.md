@@ -3,6 +3,11 @@
 An add-on for the **orb_scalper** project. It reuses that project's `.env` token, Upstox client,
 Telegram sender and AWS setup, and only adds new files. It sends alerts and never places orders.
 
+> **Default: alert-only.** Backtests over Oct 2025 to Sep 2026 (about 190 trades per variant, see
+> `python range_backtest.py --compare`) found no SL/target rule that made money in both 6-month periods.
+> So the live monitor only tells you when a tight range forms and when it breaks. Set
+> `alert_only=False` in `RangeParams` to get the SL/target levels below as well.
+
 ## 1. The idea
 
 Indices often sit in a tight band on the 15m chart before a sharp move. The scanner finds those bands
@@ -18,8 +23,10 @@ and alerts you the moment price breaks out either way, so you can take the scalp
 | **Timing** | no new ranges or breakouts after **15:00**; one range or scalp per index at a time; open scalps close at 15:30 |
 
 ### Alerts you'll get on Telegram
-`🟡 TIGHT RANGE` (high, low, width, ATR) → `🟢/🔴 BREAKOUT UP/DOWN` (entry, SL, target) →
-`✅ TARGET HIT` / `❌ SL HIT` / `⏹️ EOD CLOSE` → `📊 Day summary`. Results go to `logs/range_trades_YYYYMMDD.csv`.
+Alert-only (default): `🟡 TIGHT RANGE` (high, low, width, how tight vs recent ranges) → `🟢/🔴 BREAKOUT UP/DOWN`
+(price, range) → `📊 Day summary`.
+With `alert_only=False`, breakouts also carry entry/SL/target, followed by `✅ TARGET HIT` / `❌ SL HIT` / `⏹️ EOD CLOSE`,
+logged to `logs/range_trades_YYYYMMDD.csv`.
 
 ## 2. Install into orb_scalper
 

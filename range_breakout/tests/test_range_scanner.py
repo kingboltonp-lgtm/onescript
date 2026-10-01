@@ -32,7 +32,7 @@ SHORT = dict(min_candles=4, max_candles=12, tight_percentile=0, range_atr_mult=1
 
 
 def scanner(**kw):
-    sc = TightRangeScanner("NIFTY 50", RangeParams(**{"breakout_buffer_pct": 0, **SHORT, **kw}))
+    sc = TightRangeScanner("NIFTY 50", RangeParams(**{"breakout_buffer_pct": 0, "alert_only": False, **SHORT, **kw}))
     sc.warmup(history())
     return sc
 
@@ -225,6 +225,14 @@ class TightRangeTest(unittest.TestCase):
         evs = feed(sc, candles([WIDE] + [TIGHT] * 4 + [(103, 106, 102, 105.5)] + held))
         self.assertNotIn("BREAKOUT", [e.kind for e in evs])
         self.assertIsNone(sc.pending)
+
+    def test_alert_only_breakout_has_no_levels(self):
+        sc = scanner(alert_only=True)
+        evs = feed(sc, candles([WIDE] + [TIGHT] * 4 + [(102, 106, 102, 105)]))
+        msg = fmt_event(evs[1], sc.p)
+        self.assertIn("BREAKOUT UP NIFTY 50", msg)
+        self.assertNotIn("SL", msg)
+        self.assertNotIn("Target", msg)
 
     def test_alert_formatting(self):
         sc = scanner()

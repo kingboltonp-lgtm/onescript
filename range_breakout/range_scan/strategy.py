@@ -44,6 +44,9 @@ class Candle:
 class RangeParams:
     """Tune the scanner here (the ORB scalper's StrategyParams is left untouched)."""
     candle_minutes: int = 15
+    # Backtests (Oct 2025 - Sep 2026) found no SL/target rule with an edge, so by default the live
+    # monitor only reports ranges and breakouts; set False to also send SL/target levels and results.
+    alert_only: bool = True
     min_candles: int = 30           # 30 x 15m = 7.5 trading hours, so ranges span sessions
     max_candles: int = 60
     span_days: bool = True          # let a range continue across the overnight gap

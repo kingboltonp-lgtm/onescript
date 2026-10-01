@@ -75,6 +75,7 @@ class RangeMonitor:
         self.scanners = {name: TightRangeScanner(name, P) for name in INDEX_NAMES}
         self.caught_up = set()
         self.done = []  # closed scalp events
+        self.breakouts = []
         LOG_DIR.mkdir(exist_ok=True)
         self.trade_file = LOG_DIR / f"range_trades_{now_ist():%Y%m%d}.csv"
 
@@ -90,10 +91,10 @@ class RangeMonitor:
                 sc.warmup(df_to_candles(hist))
             except Exception as e:
                 log.warning("warmup %s failed: %s", name, e)
-        self.tg.send(f"📐 <b>Range scanner started</b>: {', '.join(INDEX_NAMES)} on {P.candle_minutes}m\n"
+        mode = "alerts only" if P.alert_only else f"SL {P.sl_atr:g} ATR, target {P.target_r:g}R"
+        self.tg.send(f"📐 <b>Range scanner started</b> ({mode}): {', '.join(INDEX_NAMES)} on {P.candle_minutes}m\n"
                      f"Tight = {P.min_candles}+ candles in the narrowest {P.tight_percentile:g}% of the last "
-                     f"{P.lookback_days} sessions | SL {P.sl_atr:g} ATR inside (max midpoint) | "
-                     f"target {P.target_r:g}R | last alert {P.last_alert_time:%H:%M}")
+                     f"{P.lookback_days} sessions | last alert {P.last_alert_time:%H:%M}")
         return True
 
     def process_bar(self, bar_end: datetime):
@@ -132,6 +133,10 @@ class RangeMonitor:
     def _handle(self, events):
         for ev in events:
             log.info(ev.message)
+            if ev.kind == "BREAKOUT":
+                self.breakouts.append(ev)
+            if P.alert_only and ev.kind in ("TARGET", "STOP", "EXPIRED", "SKIP"):
+                continue  # alert-only: no trade levels, so no trade results either
             self.tg.send(fmt_event(ev, P))
             if ev.kind in ("TARGET", "STOP", "EXPIRED"):
                 self.done.append(ev)
@@ -149,6 +154,11 @@ class RangeMonitor:
                         now_ist(), ev.price, ev.kind, ev.points])
 
     def summary(self):
+        if P.alert_only:
+            lines = [f"{e.name} {e.side} @ {e.price:.2f}" for e in self.breakouts]
+            self.tg.send(f"📊 <b>Range monitor day summary</b>: {len(lines)} breakouts\n" + "\n".join(lines)
+                         if lines else "📊 <b>Range monitor day summary</b>: no breakouts today.")
+            return
         if not self.done:
             self.tg.send("📊 <b>Range scanner day summary</b>: no breakouts today.")
             return
