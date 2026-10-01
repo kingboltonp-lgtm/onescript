@@ -133,7 +133,7 @@ class TightRangeTest(unittest.TestCase):
         ev = sc.on_price(T0 + timedelta(minutes=80), 120)  # 16 pts past the edge, ATR ~20
         self.assertEqual(ev[0].kind, "SKIP")
         self.assertIsNone(sc.scalp)
-        self.assertIn("MISSED", fmt_event(ev[0], sc.p))
+        self.assertIn("too far", fmt_event(ev[0], sc.p))
 
     def test_default_needs_30_candles_across_days(self):
         p = RangeParams(breakout_buffer_pct=0, tight_percentile=0, range_atr_mult=4.0)
@@ -190,6 +190,24 @@ class TightRangeTest(unittest.TestCase):
         nxt = datetime(2026, 9, 2, 9, 15, tzinfo=IST)
         evs = feed(sc, candles([(130, 131, 129, 130)], nxt))  # gaps 26 pts over the 104 high
         self.assertEqual(evs[0].kind, "SKIP")  # too far past the edge to chase
+
+    def test_opening_candle_ignored(self):
+        sc = scanner(span_days=True, no_entry_before=time(9, 30))
+        feed(sc, candles([WIDE] + [TIGHT] * 4))
+        nxt = datetime(2026, 9, 2, 9, 15, tzinfo=IST)
+        self.assertEqual(sc.on_price(nxt + timedelta(minutes=5), 104.5), [])
+        self.assertEqual(feed(sc, candles([(103, 105, 99, 103)], nxt)), [])
+        self.assertIsNotNone(sc.rng)  # range survives the opening candle
+        ev = sc.on_price(nxt + timedelta(minutes=20), 104.5)
+        self.assertEqual(ev[0].kind, "BREAKOUT")
+
+    def test_trend_filter(self):
+        sc = scanner(trend_ema=5)
+        feed(sc, candles([WIDE] + [TIGHT] * 4))
+        sc.ema = 150  # price far below the EMA: downtrend
+        ev = sc.on_price(T0 + timedelta(minutes=80), 104.5)
+        self.assertEqual(ev[0].kind, "SKIP")
+        self.assertIn("against the trend", fmt_event(ev[0], sc.p))
 
     def test_alert_formatting(self):
         sc = scanner()

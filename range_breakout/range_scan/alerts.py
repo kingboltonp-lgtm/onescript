@@ -36,8 +36,8 @@ def fmt_breakout(ev, p) -> str:
 
 def fmt_skip(ev) -> str:
     r = ev.rng
-    return (f"⚪ <b>MISSED {escape(ev.name)}</b> broke {'UP' if ev.side == UP else 'DOWN'} but LTP {ev.price:.2f} "
-            f"is too far from the range {r.low:.2f} - {r.high:.2f} to chase")
+    return (f"⚪ <b>SKIPPED {escape(ev.name)}</b> broke {'UP' if ev.side == UP else 'DOWN'} of "
+            f"{r.low:.2f} - {r.high:.2f}, but {escape(ev.reason)}")
 
 
 def fmt_exit(ev) -> str:

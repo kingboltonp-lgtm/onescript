@@ -4,6 +4,7 @@ Examples:
     python range_backtest.py --days 60
     python range_backtest.py --symbols "NIFTY 50" BANKNIFTY --from 2026-06-01 --to 2026-08-31 -v
     python range_backtest.py --csv nifty_15m.csv --name "NIFTY 50"
+    python range_backtest.py --days 180 --compare     # rule variants side by side
 
 CSV columns: timestamp,open,high,low,close[,volume] with ISO timestamps.
 Breakouts fill at the trigger price when a candle's high/low crosses it (ltp mode)
@@ -12,7 +13,8 @@ or at the close (close mode). If one candle touches both SL and target, it count
 import argparse
 import csv
 from collections import Counter
-from datetime import date, datetime, timedelta
+from dataclasses import replace
+from datetime import date, datetime, time, timedelta
 
 from range_scan.strategy import IST, INDEX_NAMES, PARAMS as P, Candle, TightRangeScanner
 
@@ -45,6 +47,44 @@ def simulate(name, candles, p, start=None):
     return events
 
 
+PRESETS = {
+    "current": {},
+    "close-confirm": dict(breakout_on="close"),
+    "skip-0915": dict(no_entry_before=time(9, 30)),
+    "trend-ema200": dict(trend_ema=200),
+    "close+0930+ema200": dict(breakout_on="close", no_entry_before=time(9, 30), trend_ema=200),
+    "sl1.5atr-1.5R": dict(sl_atr=1.5, target_r=1.5),
+    "all-filters+1.5atr": dict(breakout_on="close", no_entry_before=time(9, 30), trend_ema=200,
+                               sl_atr=1.5, target_r=1.5),
+    "tightest-10%": dict(tight_percentile=10),
+}
+
+
+def r_multiple(e):
+    risk = abs(e.scalp.entry - e.scalp.stop)
+    return e.points / risk if risk else 0.0
+
+
+def compare(datasets):
+    names = [n for n, _, _ in datasets]
+    print(f"{'variant':<20}" + "".join(f"{n:>22}" for n in names) + f"{'ALL':>22}")
+    print(f"{'':<20}" + "".join(f"{'trades win%  total R':>22}" for _ in names + ['ALL']))
+    for label, over in PRESETS.items():
+        p = replace(P, **over)
+        cells, all_r = [], []
+        for name, candles, start in datasets:
+            rs = [r_multiple(e) for _, e in simulate(name, candles, p, start)
+                  if e.kind in ("TARGET", "STOP", "EXPIRED")]
+            all_r += rs
+            cells.append(rs)
+        cells.append(all_r)
+        row = ""
+        for rs in cells:
+            win = sum(r > 0 for r in rs) / len(rs) * 100 if rs else 0
+            row += f"{len(rs):>9} {win:5.0f}% {sum(rs):+6.1f}"
+        print(f"{label:<20}{row}")
+
+
 def stats(events) -> dict:
     events = [e for _, e in events]
     kinds = Counter(e.kind for e in events)
@@ -58,6 +98,7 @@ def stats(events) -> dict:
             "win_rate_%": round(sum(x > 0 for x in pts) / len(pts) * 100, 1),
             "total_pts": round(sum(pts), 2), "avg_pts": round(sum(pts) / len(pts), 2),
             "profit_factor": round(gross_win / gross_loss, 2) if gross_loss else float("inf"),
+            "total_R": round(sum(r_multiple(e) for e in done), 2),
         })
     return out
 
@@ -71,6 +112,7 @@ def main():
     ap.add_argument("--csv", help="offline: one index's candles from a CSV")
     ap.add_argument("--name", default="CSV")
     ap.add_argument("-v", "--verbose", action="store_true", help="print every alert")
+    ap.add_argument("--compare", action="store_true", help="run the rule variants in PRESETS side by side")
     a = ap.parse_args()
 
     if a.csv:
@@ -90,6 +132,9 @@ def main():
             datasets.append((name, df_to_candles(df), frm))
         print(f"Range backtest {frm} -> {to} | {P.candle_minutes}m candles\n")
 
+    if a.compare:
+        compare(datasets)
+        return
     for name, candles, start in datasets:
         events = simulate(name, candles, P, start)
         if a.verbose:

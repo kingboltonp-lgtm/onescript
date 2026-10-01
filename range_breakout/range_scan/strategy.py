@@ -59,6 +59,8 @@ class RangeParams:
     sl_atr: float = 1.0             # SL: 1 ATR back inside the range, never deeper than its midpoint
     target_r: float = 2.0           # target = 2 x risk
     max_extension_atr: float = 0.5  # don't chase: skip if entry is this many ATR past the range edge
+    no_entry_before: time = time(9, 15)  # e.g. 09:30 ignores breakouts in the opening candle
+    trend_ema: int = 0              # e.g. 200 (~8 sessions): only trade the side the range sits on vs this 15m EMA (0 = off)
     last_alert_time: time = time(15, 0)
 
 
@@ -101,6 +103,7 @@ class Event:
     points: float = 0.0
     rng: Range = None
     scalp: Scalp = None
+    reason: str = ""  # why a SKIP was skipped
 
 
 TICK = 0.05
@@ -132,6 +135,8 @@ class TightRangeScanner:
         self.rng = None
         self.scalp = None
         self._widths = {}  # end index -> span of the min_candles window ending there
+        self._ref = {}  # window start index -> sorted reference widths
+        self.ema = None
 
     # --- helpers -----------------------------------------------------------
     def _end_time(self, c):
@@ -162,10 +167,14 @@ class TightRangeScanner:
 
     def _recent_widths(self, before):
         """Spans of every min_candles window that ended before index `before`, over lookback_days."""
+        if before in self._ref:
+            return self._ref[before]
         per_day = 375 // self.p.candle_minutes  # 09:15-15:30
         lo = max(self.p.min_candles - 1, before - self.p.lookback_days * per_day)
         widths = sorted(self._width(e) for e in range(lo, before))
-        return widths if len(widths) >= 5 * per_day else []  # need ~5 sessions to judge
+        widths = widths if len(widths) >= 5 * per_day else []  # need ~5 sessions to judge
+        self._ref[before] = widths
+        return widths
 
     def _find_range(self):
         last = len(self.candles) - 1
@@ -217,12 +226,16 @@ class TightRangeScanner:
         r = self.rng
         sign = 1 if side == UP else -1
         edge = r.high if side == UP else r.low
+        reason = ""
         if (price - edge) * sign > self.p.max_extension_atr * r.atr:
+            reason = f"price {_fmt(price)} is too far past {_fmt(edge)} to chase"
+        elif self.p.trend_ema and self.ema is not None and ((r.high + r.low) / 2 - self.ema) * sign < 0:
+            reason = f"against the trend (EMA{self.p.trend_ema} {_fmt(self.ema)})"
+        if reason:
             self.rng = None
             self.search_from = len(self.candles)
-            return Event("SKIP", self.name,
-                         f"{self.name} broke {side} but price {_fmt(price)} is too far past "
-                         f"{_fmt(edge)} to chase", side=side, price=price, rng=r)
+            return Event("SKIP", self.name, f"{self.name} broke {side} but {reason}",
+                         side=side, price=price, rng=r, reason=reason)
         # A real breakout shouldn't fall back deep into the box: SL sits sl_atr back inside the
         # broken edge, capped at the range midpoint so wide ranges don't get wide stops.
         mid = (r.high + r.low) / 2
@@ -262,9 +275,16 @@ class TightRangeScanner:
         return None
 
     # --- inputs ------------------------------------------------------------
+    def _push(self, c):
+        self.candles.append(c)
+        if self.p.trend_ema:
+            k = 2 / (self.p.trend_ema + 1)
+            self.ema = c.close if self.ema is None else self.ema + k * (c.close - self.ema)
+
     def warmup(self, candles):
-        """Load earlier days' candles for ATR. No events."""
-        self.candles.extend(candles)
+        """Load earlier days' candles for ATR, range ranking and EMA. No events."""
+        for c in candles:
+            self._push(c)
 
     def on_candle(self, c):
         """Feed one completed candle. Returns a list of Events."""
@@ -280,7 +300,7 @@ class TightRangeScanner:
             if not self.p.span_days:
                 self.search_from = self.day_start
                 self.rng = None
-        self.candles.append(c)
+        self._push(c)
 
         # 1. an open scalp from an earlier candle
         if self.scalp and self.scalp.ts < c.ts:
@@ -293,6 +313,8 @@ class TightRangeScanner:
         late = self._end_time(c) > self.p.last_alert_time
 
         # 2. breakout of the active range
+        if self.rng and c.ts.time() < self.p.no_entry_before:
+            return events  # opening candle(s) ignored: the range stays as it was
         if self.rng:
             up, down = self._triggers()
             if self.p.breakout_on == "close":
@@ -341,7 +363,8 @@ class TightRangeScanner:
             if (s.side == UP and price >= s.target) or (s.side == DOWN and price <= s.target):
                 return [self._close_scalp("TARGET", price)]
             return []
-        if self.rng and self.p.breakout_on == "ltp" and ts.time() <= self.p.last_alert_time:
+        if (self.rng and self.p.breakout_on == "ltp" and ts.time() <= self.p.last_alert_time
+                and ts.time() >= self.p.no_entry_before):
             up, down = self._triggers()
             if price >= up:
                 return [self._breakout(UP, price, ts)]
