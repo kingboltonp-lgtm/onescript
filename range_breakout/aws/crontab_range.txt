@@ -1,0 +1,3 @@
+# Range scanner: add this line to aws/crontab.txt in the orb_scalper folder (server time zone is Asia/Kolkata).
+# Mon–Fri 08:50: wait for today's token (pushed by push_token.ps1), then scan NIFTY 50 / BANKNIFTY / SENSEX until 15:30
+50 8 * * 1-5 cd __PROJECT__ && .venv/bin/python run_range_live.py >> logs/cron_range.log 2>&1

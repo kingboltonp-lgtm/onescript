@@ -1,18 +1,19 @@
 """Tight-range breakout scanner for 15-minute index candles.
 
-Pure logic with no I/O, shared by the live scanner and the backtest. One
-scanner instance watches one index.
+Pure logic with no I/O, shared by run_range_live.py and range_backtest.py, so
+what you backtest is what runs live. One scanner instance watches one index.
 
-A *tight range* is a run of at least MIN_RANGE_CANDLES completed candles
-(today only) whose total high-low span is at most RANGE_ATR_MULT x the ATR of
-the candles before it (and, optionally, at most MAX_RANGE_PCT of price). The
+A *tight range* is a run of at least min_candles completed candles (30 by
+default, so it reaches back into earlier sessions; set span_days=False to keep
+ranges inside one day) whose total high-low span is at most range_atr_mult x the ATR of
+the candles before it (and, optionally, at most max_range_pct of price). The
 longest such run ending at the latest candle is taken, and it keeps growing
 while new candles stay inside it.
 
-A *breakout* is price moving BREAKOUT_BUFFER_PCT beyond the range high (up) or
-low (down): on live LTP when BREAKOUT_ON=ltp, or on a 15m close when
-BREAKOUT_ON=close. Each breakout gets a scalp plan (stop = other side of the
-range, target = TARGET_MULT x range width from entry) and its outcome is
+A *breakout* is price moving breakout_buffer_pct beyond the range high (up) or
+low (down): on live LTP when breakout_on="ltp", or on a 15m close when
+breakout_on="close". Each breakout gets a scalp plan (stop = other side of the
+range, target = target_mult x range width from entry) and its outcome is
 reported. After a breakout the scanner looks for the next range.
 """
 from dataclasses import dataclass
@@ -35,33 +36,25 @@ class Candle:
     volume: float = 0.0
 
 
-@dataclass
-class Params:
+@dataclass(frozen=True)
+class RangeParams:
+    """Tune the scanner here (the ORB scalper's StrategyParams is left untouched)."""
     candle_minutes: int = 15
-    min_candles: int = 4
-    max_candles: int = 12
+    min_candles: int = 30           # 30 x 15m = 7.5 trading hours, so ranges span sessions
+    max_candles: int = 60
+    span_days: bool = True          # let a range continue across the overnight gap
     atr_period: int = 14
-    range_atr_mult: float = 1.5
+    range_atr_mult: float = 4.0     # 30-candle span vs one-candle ATR; calibrate with the backtest
     max_range_pct: float = 0.0
     breakout_buffer_pct: float = 0.02
     breakout_on: str = "ltp"  # ltp | close
     target_mult: float = 1.0
+    max_extension_atr: float = 0.5  # don't chase: skip if entry is this many ATR past the range edge
     last_alert_time: time = time(15, 0)
 
-    @classmethod
-    def from_config(cls, cfg):
-        return cls(
-            candle_minutes=cfg.candle_minutes,
-            min_candles=cfg.min_range_candles,
-            max_candles=cfg.max_range_candles,
-            atr_period=cfg.atr_period,
-            range_atr_mult=cfg.range_atr_mult,
-            max_range_pct=cfg.max_range_pct,
-            breakout_buffer_pct=cfg.breakout_buffer_pct,
-            breakout_on=cfg.breakout_on,
-            target_mult=cfg.target_mult,
-            last_alert_time=cfg.last_alert_time,
-        )
+
+PARAMS = RangeParams()
+INDEX_NAMES = ["NIFTY 50", "BANKNIFTY", "SENSEX"]  # keys of scalper.universe.INDICES
 
 
 @dataclass
@@ -90,12 +83,28 @@ class Scalp:
 
 @dataclass
 class Event:
-    kind: str  # RANGE, BREAKOUT, TARGET, STOP, EXPIRED
+    kind: str  # RANGE, BREAKOUT, SKIP, TARGET, STOP, EXPIRED
     name: str
-    message: str
+    message: str  # plain-text summary (logs, backtest)
     side: str = ""
     price: float = 0.0
     points: float = 0.0
+    rng: Range = None
+    scalp: Scalp = None
+
+
+TICK = 0.05
+
+
+def rnd(x):
+    return round(round(x / TICK) * TICK, 2)
+
+
+def span_label(start, end):
+    """'11:15-12:15' within a day, '30 Sep 13:15 - 01 Oct 12:15' across days."""
+    if start.date() == end.date():
+        return f"{start:%H:%M}-{end:%H:%M}"
+    return f"{start:%d %b %H:%M} - {end:%d %b %H:%M}"
 
 
 def _fmt(x):
@@ -130,11 +139,11 @@ class TightRangeScanner:
 
     def _triggers(self):
         buf = self.rng.high * self.p.breakout_buffer_pct / 100
-        return self.rng.high + buf, self.rng.low - buf
+        return rnd(self.rng.high + buf), rnd(self.rng.low - buf)
 
     def _find_range(self):
         last = len(self.candles) - 1
-        first_allowed = max(self.day_start, self.search_from)
+        first_allowed = self.search_from if self.p.span_days else max(self.day_start, self.search_from)
         best = None
         hi = lo = None
         for n in range(1, self.p.max_candles + 1):
@@ -163,14 +172,21 @@ class TightRangeScanner:
         return (
             f"{self.name} tight range {_fmt(r.low)} - {_fmt(r.high)} "
             f"({r.width:.1f} pts, {pct:.2f}%) over {r.candles}x{self.p.candle_minutes}m "
-            f"{r.start:%H:%M}-{end:%H:%M} | ATR {r.atr:.1f}"
+            f"{span_label(r.start, end)} | ATR {r.atr:.1f}"
         )
 
     def _breakout(self, side, price, ts):
         r = self.rng
         sign = 1 if side == UP else -1
+        edge = r.high if side == UP else r.low
+        if (price - edge) * sign > self.p.max_extension_atr * r.atr:
+            self.rng = None
+            self.search_from = len(self.candles)
+            return Event("SKIP", self.name,
+                         f"{self.name} broke {side} but price {_fmt(price)} is too far past "
+                         f"{_fmt(edge)} to chase", side=side, price=price, rng=r)
         stop = r.low if side == UP else r.high
-        target = price + sign * self.p.target_mult * r.width
+        target = rnd(price + sign * self.p.target_mult * r.width)
         self.scalp = Scalp(side, price, stop, target, ts, r)
         self.rng = None
         self.search_from = len(self.candles)  # next range starts after this candle
@@ -178,7 +194,7 @@ class TightRangeScanner:
             "BREAKOUT", self.name,
             f"{self.name} BREAKOUT {side} @ {_fmt(price)} | range {_fmt(r.low)} - {_fmt(r.high)} "
             f"| SL {_fmt(stop)} | TGT {_fmt(target)}",
-            side=side, price=price,
+            side=side, price=price, rng=r, scalp=self.scalp,
         )
 
     def _close_scalp(self, kind, price):
@@ -187,7 +203,7 @@ class TightRangeScanner:
         self.scalp = None
         label = {"TARGET": "target hit", "STOP": "stop hit", "EXPIRED": "closed at end of day"}[kind]
         return Event(kind, self.name, f"{self.name} {s.side} scalp {label} @ {_fmt(price)} ({pts:+.1f} pts)",
-                     side=s.side, price=price, points=round(pts, 2))
+                     side=s.side, price=price, points=round(pts, 2), rng=s.rng, scalp=s)
 
     def _check_scalp_candle(self, c):
         s = self.scalp
@@ -218,8 +234,10 @@ class TightRangeScanner:
                 last = self.candles[-1]
                 events.append(self._close_scalp("EXPIRED", last.close))
             self.day = c.ts.date()
-            self.day_start = self.search_from = len(self.candles)
-            self.rng = None
+            self.day_start = len(self.candles)
+            if not self.p.span_days:
+                self.search_from = self.day_start
+                self.rng = None
         self.candles.append(c)
 
         # 1. an open scalp from an earlier candle
@@ -248,9 +266,11 @@ class TightRangeScanner:
                 else:
                     side = UP if hit_up else DOWN if hit_down else None
                 price = up if side == UP else down
+                if side == UP and c.open > up or side == DOWN and c.open < down:
+                    price = c.open  # gapped through the level: the open is the first price seen
             if side and not late and not self.scalp:
                 events.append(self._breakout(side, price, c.ts))
-                ev = self._check_scalp_candle(c) if self.p.breakout_on == "ltp" else None
+                ev = self._check_scalp_candle(c) if self.scalp and self.p.breakout_on == "ltp" else None
                 if ev:
                     events.append(ev)
                 return events
@@ -267,7 +287,7 @@ class TightRangeScanner:
             r = self._find_range()
             if r:
                 self.rng = r
-                events.append(Event("RANGE", self.name, self._range_msg(r)))
+                events.append(Event("RANGE", self.name, self._range_msg(r), rng=r))
         return events
 
     def on_price(self, ts, price):

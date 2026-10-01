@@ -1,9 +1,0 @@
-[Unit]
-Description=Start the range breakout scanner each weekday before the open
-
-[Timer]
-OnCalendar=Mon..Fri 09:05 Asia/Kolkata
-Persistent=false
-
-[Install]
-WantedBy=timers.target
