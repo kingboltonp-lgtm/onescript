@@ -127,8 +127,12 @@ def main():
                              f"ind_nifty500list.csv from niftyindices.com and pass --list-csv <file>.")
     syms = [s for s in names if s in keys]
     print(f"Downloading daily candles for {len(syms)} stocks (cached after the first run)...")
+    series = {}
     with ThreadPoolExecutor(max_workers=4) as ex:
-        series = dict(zip(syms, ex.map(lambda s: cached_daily(api, s, keys[s], data_start, end), syms)))
+        for n, (s, v) in enumerate(zip(syms, ex.map(lambda s: cached_daily(api, s, keys[s], data_start, end), syms)), 1):
+            series[s] = v
+            if n % 50 == 0 or n == len(syms):
+                print(f"  {n}/{len(syms)} stocks", flush=True)
     px = pd.DataFrame({s: v for s, v in series.items() if len(v)}).sort_index()
     bench = {n: cached_daily(api, n, k, data_start, end) for n, k in BENCHMARKS.items()}
     px = px.reindex(bench["NIFTY 500"].index).ffill(limit=5)
