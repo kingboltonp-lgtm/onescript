@@ -55,6 +55,11 @@ python public_compare.py --orb-csv logs\backtest_v2_2026-04-03_2026-09-30.csv
 Runs buy-and-hold, 200-day trend, golden cross, daily Supertrend, Donchian 20/10 and a classic 15m ORB on the
 same Upstox data and costs as your range breakout and ORB scalper, as % of index value per index.
 
+```bash
+python momentum_backtest.py --years 5
+```
+Monthly momentum on Nifty 500 stocks (top 20 by 12-1 month return, equal weight) vs holding Nifty 50 / Nifty 500.
+
 ## 4. AWS
 The scanner runs on the same EC2 server, in the same `~/orb_scalper` folder, so `push_token.ps1` already
 delivers its token.
