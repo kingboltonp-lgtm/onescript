@@ -1,0 +1,5 @@
+.env
+.upstox_token
+__pycache__/
+*.pyc
+logs/
