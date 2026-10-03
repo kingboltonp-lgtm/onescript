@@ -33,7 +33,7 @@ logged to `logs/range_trades_YYYYMMDD.csv`.
 Copy these into your `orb_scalper` folder (next to `config.py`):
 
 ```
-range_scan/            run_range_live.py      range_backtest.py
+range_scan/            run_range_live.py      range_backtest.py      public_compare.py
 tests/test_range_scanner.py                   aws/crontab_range.txt
 ```
 
@@ -47,6 +47,13 @@ python run_range_live.py                           # live; waits for the token, 
 ```
 The token is the same one `scripts/get_access_token.py` writes into `.env`. If it is missing, the
 scanner waits and reminds you on Telegram at 09:10 and 09:40, then gives up at 10:30.
+
+### Compare with public strategies
+```bash
+python public_compare.py --orb-csv logs\backtest_v2_2026-04-03_2026-09-30.csv
+```
+Runs buy-and-hold, 200-day trend, golden cross, daily Supertrend, Donchian 20/10 and a classic 15m ORB on the
+same Upstox data and costs as your range breakout and ORB scalper, as % of index value per index.
 
 ## 4. AWS
 The scanner runs on the same EC2 server, in the same `~/orb_scalper` folder, so `push_token.ps1` already
